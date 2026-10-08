@@ -1,14 +1,15 @@
 import { createHmac, randomBytes, scryptSync, timingSafeEqual, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { extname, join } from 'node:path'
+import { extname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import express from 'express'
 import multer from 'multer'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 
-const port = Number(process.env.API_PORT || 3001)
+const port = Number(process.env.PORT || process.env.API_PORT || 3001)
+const host = process.env.HOST || (process.env.PORT ? '0.0.0.0' : '127.0.0.1')
 const root = process.cwd()
-const dataDirectory = join(root, 'data')
+const dataDirectory = resolve(process.env.DATA_DIR || join(root, 'data'))
 const uploadDirectory = join(dataDirectory, 'uploads')
 mkdirSync(uploadDirectory, { recursive: true })
 
@@ -78,6 +79,7 @@ if (!sessionSecret) {
 
 const app = express()
 app.disable('x-powered-by')
+app.get('/api/health', (_request, response) => response.json({ status: 'ok' }))
 app.use(express.json({ limit: '2mb' }))
 app.use(express.urlencoded({ extended: false, limit: '2mb' }))
 
@@ -422,4 +424,4 @@ app.use((error, _request, response, _next) => {
   response.status(status).json({ error: message })
 })
 
-app.listen(port, '127.0.0.1', () => console.log(`Siteform API listening at http://127.0.0.1:${port}`))
+app.listen(port, host, () => console.log(`Siteform API listening at http://${host}:${port}`))

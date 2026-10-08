@@ -25,4 +25,17 @@ SQLite data and uploaded assets are stored under `data/`; keep that directory pr
 
 ## Build
 
-Run `npm run build` for the TypeScript check and production Vite bundle.
+Run `npm run build` for the production Next.js build. Run `npm run legacy:build` for the TypeScript-checked Vite build.
+
+## Production deployment
+
+The Next.js frontend can run on Vercel, with the Express API on Railway. The API uses SQLite and stores uploaded plans on disk, so it must run as a single Railway replica with a persistent volume.
+
+1. Create a Railway service from this repository. Railway uses `railway.json` to start the API.
+2. Attach a persistent volume to the service at `/data`.
+3. Set the Railway variables `DATA_DIR=/data`, `NODE_ENV=production`, and `SESSION_SECRET` to a securely generated, stable random secret. Keep the volume attached so the database, uploaded plans, and generated session secret survive redeploys.
+4. Generate a public domain for the Railway service and confirm its `/api/health` endpoint returns `{"status":"ok"}`.
+5. Import this repository into Vercel as a Next.js project and set `API_ORIGIN` to the Railway origin (for example, `https://your-api.up.railway.app`, without a trailing slash). Vercel routes `/api/*` requests to this service.
+6. Deploy the Vercel project, then immediately visit `/admin` and create the first administrator account.
+
+The Railway service requires Node.js 22.5 or newer for `node:sqlite`. Do not run multiple API replicas with the SQLite database. Back up the persistent volume regularly.
