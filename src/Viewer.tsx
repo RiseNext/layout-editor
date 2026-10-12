@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ArrowUpRight, ChevronDown, Compass, Eye, EyeOff, Images, LayoutGrid, LocateFixed, MapPin, MessageCircle, Phone, Search, SlidersHorizontal, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { api } from './api'
-import { polygonInteriorPoint } from './geometry'
+import { eventPoint, polygonInteriorPoint } from './geometry'
 import { defaultColors, statusLabels, type Plot, type PlotStatus, type Point, type Project } from './types'
 
 type ViewBox = { x: number; y: number; width: number; height: number }
@@ -25,8 +25,10 @@ export default function Viewer({ slug, embed = false }: { slug: string; embed?: 
   const [amenitiesVisible, setAmenitiesVisible] = useState(true)
   const [galleryOpen, setGalleryOpen] = useState(false)
   const [view, setView] = useState<ViewBox>({ x: 0, y: 0, width: 1000, height: 700 })
+  const [hoverInfo, setHoverInfo] = useState<{ x: number; y: number; mapX: number; mapY: number; plotId: string | null; locationName: string; locationKind: string } | null>(null)
   const [error, setError] = useState('')
   const svgRef = useRef<SVGSVGElement>(null)
+  const mapRef = useRef<HTMLDivElement>(null)
   const panRef = useRef<{ x: number; y: number; view: ViewBox } | null>(null)
 
   useEffect(() => {
@@ -81,10 +83,35 @@ export default function Viewer({ slug, embed = false }: { slug: string; embed?: 
   }
   function panStart(event: ReactPointerEvent<SVGSVGElement>) {
     if (event.target !== event.currentTarget && (event.target as Element).tagName !== 'image') return
+    setHoverInfo(null)
     panRef.current = { x: event.clientX, y: event.clientY, view: { ...view } }
     svgRef.current?.setPointerCapture(event.pointerId)
   }
+  function updateHover(event: ReactPointerEvent<SVGSVGElement>) {
+    if (event.pointerType === 'touch' || !svgRef.current || !mapRef.current) return
+    const point = eventPoint(event, svgRef.current)
+    const bounds = mapRef.current.getBoundingClientRect()
+    const hoveredElement = event.target instanceof Element ? event.target : null
+    const plotId = hoveredElement?.closest<SVGGElement>('[data-plot-id]')?.dataset.plotId ?? null
+    const location = hoveredElement?.closest<SVGElement>('[data-map-location]')
+    const locationName = location?.dataset.mapLocation ?? ''
+    const locationKind = location?.dataset.mapKind ?? ''
+    setHoverInfo({
+      x: Math.max(8, Math.min(event.clientX - bounds.left + 14, bounds.width - 268)),
+      y: Math.max(8, Math.min(event.clientY - bounds.top + 14, bounds.height - 156)),
+      mapX: point.x,
+      mapY: point.y,
+      plotId,
+      locationName,
+      locationKind,
+    })
+  }
   function panMove(event: ReactPointerEvent<SVGSVGElement>) {
+    if (panRef.current) {
+      setHoverInfo(null)
+    } else {
+      updateHover(event)
+    }
     if (!panRef.current || !svgRef.current) return
     const rect = svgRef.current.getBoundingClientRect()
     setView({ ...panRef.current.view, x: panRef.current.view.x - (event.clientX - panRef.current.x) * panRef.current.view.width / rect.width, y: panRef.current.view.y - (event.clientY - panRef.current.y) * panRef.current.view.height / rect.height })
@@ -116,14 +143,26 @@ export default function Viewer({ slug, embed = false }: { slug: string; embed?: 
         <div className="viewer-results-head"><span>LAYOUT MATCHES</span><span>{visible.length}</span></div><div className="viewer-results">{visible.slice(0, 50).map((plot) => <button key={plot.id} className={`viewer-result${selectedId === plot.id ? ' active' : ''}`} onClick={() => selectPlot(plot)}><i style={{ background: project.colors[plot.status] ?? defaultColors[plot.status] }} /><span><strong>{plot.plotNumber}</strong><small>{plot.area} {plot.areaUnit}{plot.facing ? ` · ${plot.facing}` : ''}</small></span><b>{plot.price ? money.format(plot.price) : 'Price on request'}</b></button>)}{visible.length === 0 && <p className="viewer-empty">No plots match these filters.</p>}</div>
         <footer className="viewer-side-foot"><span>INTERACTIVE MASTERPLAN</span><span>{project.slug}</span></footer>
       </aside>}
-      <section className="viewer-map-stage"><div className="viewer-map-heading"><div><span>{project.location.toUpperCase()}</span><strong>{project.name}</strong></div><span className="viewer-map-count"><i />{plots.length} PLOTS</span></div><div className="viewer-map">
-        <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} onPointerDown={panStart} onPointerMove={panMove} onPointerUp={() => { panRef.current = null }} onPointerCancel={() => { panRef.current = null }} onWheel={(event) => { event.preventDefault(); zoom(event.deltaY < 0 ? 1.12 : .89) }} onDoubleClick={(event) => { const matrix = svgRef.current?.getScreenCTM(); if (matrix) { const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()); zoom(1.5, point) } }}>
+      <section className="viewer-map-stage"><div className="viewer-map-heading"><div><span>{project.location.toUpperCase()}</span><strong>{project.name}</strong></div><span className="viewer-map-count"><i />{plots.length} PLOTS</span></div><div className="viewer-map" ref={mapRef}>
+        <svg ref={svgRef} viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`} onPointerDown={panStart} onPointerMove={panMove} onPointerLeave={() => setHoverInfo(null)} onPointerUp={() => { panRef.current = null }} onPointerCancel={() => { panRef.current = null }} onWheel={(event) => { event.preventDefault(); zoom(event.deltaY < 0 ? 1.12 : .89) }} onDoubleClick={(event) => { const matrix = svgRef.current?.getScreenCTM(); if (matrix) { const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse()); zoom(1.5, point) } }}>
           <image href={project.layoutUrl} x="0" y="0" width={project.layoutWidth} height={project.layoutHeight} preserveAspectRatio="xMidYMid meet" />
-          {project.layout.layers?.roads?.visible !== false && <g>{hasObjects.filter((item) => item.kind === 'road' && item.visible !== false).map((road) => road.kind === 'road' ? <g key={road.id}><path d={road.points.map((point, index) => `${index ? 'L' : 'M'} ${point.x * project.layoutWidth} ${point.y * project.layoutHeight}`).join(' ')} fill="none" stroke={road.color} strokeWidth={road.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" /><text className="viewer-road-label" x={road.points[0].x * project.layoutWidth} y={road.points[0].y * project.layoutHeight}>{road.name} · {road.width}m</text></g> : null)}</g>}
-          {plotsVisible && project.layout.layers?.plots?.visible !== false && <g>{visible.map((plot) => { const label = plot.labelPosition ?? polygonInteriorPoint(plot.coordinates); return <g key={plot.id} className={`viewer-plot${selectedId === plot.id ? ' selected' : ''}`} onClick={(event) => { event.stopPropagation(); setSelectedId(plot.id) }}><polygon points={plot.coordinates.map((point) => `${point.x * project.layoutWidth},${point.y * project.layoutHeight}`).join(' ')} fill={project.colors[plot.status] ?? defaultColors[plot.status]} fillOpacity={selectedId === plot.id ? '.76' : '.61'} stroke={selectedId === plot.id ? '#fff' : '#f5f0e5'} strokeWidth={selectedId === plot.id ? 3 : 1.5} vectorEffect="non-scaling-stroke"><title>{plot.plotNumber} · {plot.area} {plot.areaUnit} · {plot.facing || 'Facing not set'} · {statusLabels[plot.status]}</title></polygon><text x={label.x * project.layoutWidth} y={label.y * project.layoutHeight} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(11, view.width * .012)} pointerEvents="none">{plot.plotNumber}</text></g> })}</g>}
-          {amenitiesVisible && project.layout.layers?.amenities?.visible !== false && hasObjects.filter((item) => item.kind === 'amenity' && item.visible !== false).map((item) => item.kind === 'amenity' ? <g key={item.id} className="viewer-amenity" transform={`translate(${item.x * project.layoutWidth} ${item.y * project.layoutHeight})`}><circle r={Math.max(12, view.width * .014)} /><text y="1" textAnchor="middle" dominantBaseline="central">{item.amenityType.slice(0, 1)}</text><text className="viewer-amenity-name" y={Math.max(27, view.width * .028)} textAnchor="middle">{item.name}</text></g> : null)}
-          {project.layout.layers?.labels?.visible !== false && hasObjects.filter((item) => item.kind === 'label' && item.visible !== false).map((item) => item.kind === 'label' ? <text key={item.id} className="viewer-custom-label" x={item.x * project.layoutWidth} y={item.y * project.layoutHeight} fontSize={item.fontSize} textAnchor="middle" transform={`rotate(${item.rotation} ${item.x * project.layoutWidth} ${item.y * project.layoutHeight})`}>{item.text}</text> : null)}
+          {project.layout.layers?.roads?.visible !== false && <g>{hasObjects.filter((item) => item.kind === 'road' && item.visible !== false).map((road) => road.kind === 'road' ? <g key={road.id} data-map-location={road.name} data-map-kind={`${road.width}m road`}><path d={road.points.map((point, index) => `${index ? 'L' : 'M'} ${point.x * project.layoutWidth} ${point.y * project.layoutHeight}`).join(' ')} fill="none" stroke={road.color} strokeWidth={road.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" /><text className="viewer-road-label" x={road.points[0].x * project.layoutWidth} y={road.points[0].y * project.layoutHeight}>{road.name} · {road.width}m</text></g> : null)}</g>}
+          {plotsVisible && project.layout.layers?.plots?.visible !== false && <g>{visible.map((plot) => { const label = plot.labelPosition ?? polygonInteriorPoint(plot.coordinates); return <g key={plot.id} data-plot-id={plot.id} className={`viewer-plot${selectedId === plot.id ? ' selected' : ''}`} onClick={(event) => { event.stopPropagation(); setSelectedId(plot.id) }}><polygon points={plot.coordinates.map((point) => `${point.x * project.layoutWidth},${point.y * project.layoutHeight}`).join(' ')} fill={project.colors[plot.status] ?? defaultColors[plot.status]} fillOpacity={selectedId === plot.id ? '.76' : '.61'} stroke={selectedId === plot.id ? '#fff' : '#f5f0e5'} strokeWidth={selectedId === plot.id ? 3 : 1.5} vectorEffect="non-scaling-stroke"><title>{plot.plotNumber} · {plot.area} {plot.areaUnit} · {plot.facing || 'Facing not set'} · {statusLabels[plot.status]}</title></polygon><text x={label.x * project.layoutWidth} y={label.y * project.layoutHeight} textAnchor="middle" dominantBaseline="central" fontSize={Math.max(11, view.width * .012)} pointerEvents="none">{plot.plotNumber}</text></g> })}</g>}
+          {amenitiesVisible && project.layout.layers?.amenities?.visible !== false && hasObjects.filter((item) => item.kind === 'amenity' && item.visible !== false).map((item) => item.kind === 'amenity' ? <g key={item.id} data-map-location={item.name} data-map-kind={item.amenityType} className="viewer-amenity" transform={`translate(${item.x * project.layoutWidth} ${item.y * project.layoutHeight})`}><circle r={Math.max(12, view.width * .014)} /><text y="1" textAnchor="middle" dominantBaseline="central">{item.amenityType.slice(0, 1)}</text><text className="viewer-amenity-name" y={Math.max(27, view.width * .028)} textAnchor="middle">{item.name}</text></g> : null)}
+          {project.layout.layers?.labels?.visible !== false && hasObjects.filter((item) => item.kind === 'label' && item.visible !== false).map((item) => item.kind === 'label' ? <text key={item.id} data-map-location={item.text} data-map-kind="Site label" className="viewer-custom-label" x={item.x * project.layoutWidth} y={item.y * project.layoutHeight} fontSize={item.fontSize} textAnchor="middle" transform={`rotate(${item.rotation} ${item.x * project.layoutWidth} ${item.y * project.layoutHeight})`}>{item.text}</text> : null)}
         </svg>
+        {hoverInfo && <div className="viewer-hover-card" role="tooltip" style={{ left: hoverInfo.x, top: hoverInfo.y }}>
+          {(() => {
+            const plot = plots.find((item) => item.id === hoverInfo.plotId)
+            const inPlan = hoverInfo.mapX >= 0 && hoverInfo.mapX <= project.layoutWidth && hoverInfo.mapY >= 0 && hoverInfo.mapY <= project.layoutHeight
+            return <>
+              <div className="viewer-hover-heading"><span>{plot ? 'PLOT AVAILABILITY' : hoverInfo.locationName ? hoverInfo.locationKind : 'MAP LOCATION'}</span>{plot && <i style={{ background: project.colors[plot.status] ?? defaultColors[plot.status] }} />}</div>
+              {plot ? <><strong className="viewer-hover-title">{plot.plotNumber}</strong><span className={`viewer-hover-status ${plot.status.toLowerCase()}`}>{statusLabels[plot.status]}</span><div className="viewer-hover-facts"><span>{plot.area} {plot.areaUnit}</span><span>{plot.facing || 'Facing not set'}</span></div><strong className="viewer-hover-price">{plot.price ? money.format(plot.price) : 'Price on request'}</strong></>
+                : <><strong className="viewer-hover-title">{hoverInfo.locationName || (inPlan ? 'No plot at this point' : 'Outside site plan')}</strong>{hoverInfo.locationKind && <span className="viewer-hover-kind">{hoverInfo.locationKind}</span>}</>}
+              <span className="viewer-hover-coordinates">X {Math.round(hoverInfo.mapX).toLocaleString()} · Y {Math.round(hoverInfo.mapY).toLocaleString()}</span>
+            </>
+          })()}
+        </div>}
         <div className="viewer-action-rail">
           <button onClick={() => setAmenitiesVisible(!amenitiesVisible)} aria-pressed={amenitiesVisible}><MapPin size={15} /> Amenities</button>
           <button onClick={() => setGalleryOpen(true)}><Images size={15} /> Gallery</button>
